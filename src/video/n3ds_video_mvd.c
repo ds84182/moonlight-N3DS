@@ -37,6 +37,9 @@
 // experimentation)
 #define N3DS_YUYV_CONV_WAIT_NS 20000000
 
+#define MOON_CTR_GPU_BUF_W 1024
+#define MOON_CTR_GPU_BUF_H 512
+
 // General decoder and renderer state
 static void *nal_unit_buffer;
 static size_t nal_unit_buffer_size;
@@ -58,7 +61,7 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
     }
 
     int status =
-        mvdstdInit(MVDMODE_VIDEOPROCESSING, MVD_INPUT_H264, MVD_OUTPUT_YUYV422,
+        mvdstdInit(MVDMODE_VIDEOPROCESSING, MVD_INPUT_H264, MVD_OUTPUT_BGR565,
                    width * height * N3DS_DEC_BUFF_SIZE, NULL);
     if (status) {
         fprintf(stderr, "mvdstdInit failed: %d\n", status);
@@ -101,12 +104,12 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
     image_width = width;
     image_height = height;
     pixel_size = gspGetBytesPerPixel(px_fmt);
-    yuv_img_buffer = linearAlloc(width * height * pixel_size);
+    yuv_img_buffer = linearAlloc(MOON_CTR_VIDEO_TEX_W * MOON_CTR_VIDEO_TEX_H * pixel_size);
     if (!yuv_img_buffer) {
         fprintf(stderr, "Out of memory!\n");
         return -1;
     }
-    rgb_img_buffer = linearAlloc(width * height * pixel_size);
+    rgb_img_buffer = linearAlloc(MOON_CTR_VIDEO_TEX_W * MOON_CTR_VIDEO_TEX_H * pixel_size);
     if (!rgb_img_buffer) {
         fprintf(stderr, "Out of memory!\n");
         return -1;
@@ -118,6 +121,11 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
     mvdstdGenerateDefaultConfig(&mvdstd_config, image_width, image_height,
                                 image_width, image_height, NULL, yuv_img_buffer,
                                 NULL);
+
+    // Place within the 1024x512 buffer
+    mvdstd_config.flag_x104 = 1;
+    mvdstd_config.output_width_override = MOON_CTR_VIDEO_TEX_W;
+    mvdstd_config.output_height_override = MOON_CTR_VIDEO_TEX_H;
     MVDSTD_SetConfig(&mvdstd_config);
 
     return init_px_to_framebuffer(surface_width, surface_height, image_width,
@@ -131,7 +139,7 @@ static void n3ds_destroy(void) {
     mvdstdExit();
     linearFree(nal_unit_buffer);
     linearFree(yuv_img_buffer);
-    linearFree(rgb_img_buffer);
+    vramFree(rgb_img_buffer);
     deinit_px_to_framebuffer();
 }
 
@@ -178,6 +186,7 @@ static inline int n3ds_decode(unsigned char *indata, int inlen) {
 }
 
 static int n3ds_submit_decode_unit(PDECODE_UNIT decodeUnit) {
+    u64 start_ticks = svcGetSystemTick();
     PLENTRY entry = decodeUnit->bufferList;
     int length = 0;
 
@@ -192,17 +201,10 @@ static int n3ds_submit_decode_unit(PDECODE_UNIT decodeUnit) {
     }
     GSPGPU_FlushDataCache(nal_unit_buffer, length);
 
-    if (conversion_finish_event_handle != NULL) {
-        svcWaitSynchronization(conversion_finish_event_handle,
-                               N3DS_YUYV_CONV_WAIT_NS);
-        svcCloseHandle(conversion_finish_event_handle);
-
-        write_px_to_framebuffer(rgb_img_buffer, pixel_size);
-    }
-
     n3ds_decode(nal_unit_buffer, length);
-    yuv_to_rgb(rgb_img_buffer, yuv_img_buffer, image_width, image_height,
-               pixel_size);
+    perf_decode_ticks = svcGetSystemTick() - start_ticks;
+
+    write_px_to_framebuffer(yuv_img_buffer, rgb_img_buffer, pixel_size);
 
     // If MVD never gets an IDR frame, everything shows up gray
     if (first_frame) {

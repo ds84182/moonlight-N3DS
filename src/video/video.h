@@ -46,11 +46,21 @@ extern DECODER_RENDERER_CALLBACKS decoder_callbacks_x11_vdpau;
 #endif
 #endif
 #ifdef __3DS__
+#include <3ds/types.h>
+
+#define MOON_CTR_VIDEO_TEX_W 1024
+#define MOON_CTR_VIDEO_TEX_H 512
+
 extern bool enable_dual_display;
+
+extern u64 perf_frame_target_ticks; // Target frame rate in CPU Ticks
+extern u64 perf_decode_ticks;       // CPU ticks taken to decode video frame
+extern u64 perf_fbcopy_ticks;       // CPU ticks taken to copy framebuffer
+
 int init_px_to_framebuffer(int dest_width, int dest_height, int src_width,
                            int src_height, int px_size);
 void deinit_px_to_framebuffer();
-void write_px_to_framebuffer(uint8_t *source, int px_size);
+void write_px_to_framebuffer(const uint8_t *source, uint8_t *scratch, int px_size);
 
 extern DECODER_RENDERER_CALLBACKS decoder_callbacks_n3ds;
 extern DECODER_RENDERER_CALLBACKS decoder_callbacks_n3ds_mvd;
